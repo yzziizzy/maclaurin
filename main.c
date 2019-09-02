@@ -37,9 +37,12 @@ typedef struct {
 	uint32_t divisor;
 	uint32_t remainder;
 	
+	uint32_t add_cursor;
+	
 	pthread_mutex_t lock;
 	
 	
+	char negative;
 	char finished;
 } Fraction;
 
@@ -184,38 +187,72 @@ void add_fraction(Fraction* into, Fraction* addend) {
 	
 	pthread_mutex_lock(&into->lock);
 	
+	int sub = into->negative ^ addend->negative;
+	
 	uint32_t a, i;
 	uint32_t* out = into->data, *in = addend->data;
 	uint32_t len = into->length;
 	uint32_t alen = addend->length;
-	uint32_t carry = 0;
+	uint32_t carry = 0; // or borrow
 	
-	for(a = 0, i = 0; i < len; a++, i++) {
-		if(a >= alen) a = 0;
+	if(sub) { // subtract
 		
-		uint64_t sum = (uint64_t)out[i] + (uint64_t)in[a] + carry;
-		out[i] = (uint32_t)sum;
+		for(a = 0, i = 0; i < len; a++, i++) {
+			if(a >= alen) a = 0;
+			
+			// VERY WRONG
+			uint64_t sum = (uint64_t)out[i] - (uint64_t)in[a] - carry;
+			out[i] = (uint32_t)sum;
+			
+			carry = sum >> 32;
+		}
 		
-		carry = sum >> 32;
+		// wrap the borrow around to the front
+		i = 0;
+		a = 0;
+		while(carry) {
+			
+			uint64_t sum = (uint64_t)out[i] - (uint64_t)in[a] - carry;
+			out[i] = (uint32_t)sum;
+			
+			carry = sum >> 32;
+			
+			i++;
+			a++;
+			
+			if(a >= alen) a = 0;
+			if(i >= len) i = 0;
+		}
+		
 	}
-	
-	// wrap the carry around to the front
-	i = 0;
-	a = 0;
-	while(carry) {
+	else { // add
+		for(a = 0, i = 0; i < len; a++, i++) {
+			if(a >= alen) a = 0;
+			
+			uint64_t sum = (uint64_t)out[i] + (uint64_t)in[a] + carry;
+			out[i] = (uint32_t)sum;
+			
+			carry = sum >> 32;
+		}
 		
-		uint64_t sum = (uint64_t)out[i] + (uint64_t)in[a] + carry;
-		out[i] = (uint32_t)sum;
-		
-		carry = sum >> 32;
-		
-		i++;
-		a++;
-		
-		if(a >= alen) a = 0;
-		if(i >= len) i = 0;
+		// wrap the carry around to the front
+		i = 0;
+		a = 0;
+		while(carry) {
+			
+			uint64_t sum = (uint64_t)out[i] + (uint64_t)in[a] + carry;
+			out[i] = (uint32_t)sum;
+			
+			carry = sum >> 32;
+			
+			i++;
+			a++;
+			
+			if(a >= alen) a = 0;
+			if(i >= len) i = 0;
+		}
 	}
-	
+
 	pthread_mutex_unlock(&into->lock);
 	
 }
@@ -258,6 +295,7 @@ Fraction* new_fraction32(uint32_t divisor, uint32_t max_len) {
 	fr->data = o;
 	fr->divisor = b;
 	pthread_mutex_init(&fr->lock, NULL);
+	fr->negative = (b - 3) % 4 == 0; // 3 is negative
 	
 	int64_t t = 1ul << 32;
 	
@@ -265,7 +303,6 @@ Fraction* new_fraction32(uint32_t divisor, uint32_t max_len) {
 	int32_t first_r = t % b;
 	if(first_q == 0) lz++;
 	
-// 		;
 	o[0] = first_q;
 	
 	t = (int64_t)first_r << 32;
@@ -348,6 +385,7 @@ int main(int argc, char* argv[]) {
 	
 	ThreadInfo threads[num_threads];
 	
+	// 3 starts negative
 	atomic_init(&next_divisor, 3);
 	
 	
